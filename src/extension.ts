@@ -6,6 +6,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
+
+
+
 async function applyChanges(originalUri: vscode.Uri, modifiedUri: vscode.Uri) {
     const modifiedDocument = await vscode.workspace.openTextDocument(modifiedUri);
     const originalDocument = await vscode.workspace.openTextDocument(originalUri);
@@ -104,7 +107,7 @@ function runAutoLogging() {
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
-
+	
 	// Use the console to output diagnostic information (console.log) and errors (console.error)
 	// This line of code will only be executed once when your extension is activated
 	console.log('Congratulations, your extension "smart-paython-logger" is now active!');
@@ -156,9 +159,98 @@ export function activate(context: vscode.ExtensionContext) {
 		runAutoLogging();
         });
 
-	context.subscriptions.push(gpt_Test, addDebugLogging, autoLogging);
+	context.subscriptions.push(gpt_Test, addDebugLogging, autoLogging, 
+		vscode.window.registerWebviewViewProvider(
+		'smartPythonLoggerView',
+		new SmartPythonLoggerViewProvider(context.extensionUri)
+	));
 	
-}
+};
 
 // This method is called when your extension is deactivated
 export function deactivate() {}
+
+class SmartPythonLoggerViewProvider implements vscode.WebviewViewProvider {
+    constructor(private extensionUri: vscode.Uri) {}
+
+    public resolveWebviewView(webviewView: vscode.WebviewView, context: vscode.WebviewViewResolveContext, token: vscode.CancellationToken): void {
+        webviewView.webview.options = {
+            enableScripts: true
+        };
+
+        webviewView.webview.html = this.getHtmlForWebview(webviewView.webview);
+
+        webviewView.webview.onDidReceiveMessage(data => {
+            switch (data.type) {
+                case 'runAutoLogging':
+                    // Trigger the auto logging functionality
+                    break;
+                // Handle other messages
+            }
+        });
+    }
+
+	private getNonce() {
+		let text = '';
+		const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+		for (let i = 0; i < 32; i++) {
+			text += possible.charAt(Math.floor(Math.random() * possible.length));
+		}
+		return text;
+	};
+
+    getHtmlForWebview(webview: vscode.Webview) {
+
+		
+		// Use a nonce to only allow specific scripts to run
+		const nonce = this.getNonce();
+	
+		return `<!DOCTYPE html>
+			<html lang="en">
+			<head>
+				<meta charset="UTF-8">
+				<!-- Use a content security policy to only allow loading images from https or from our extension directory,
+				and only allow scripts that have a specific nonce. -->
+				<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+				<meta name="viewport" content="width=device-width, initial-scale=1.0">
+				<title>Logger Configuration</title>
+			</head>
+			<body>
+				<h1>Logger Configuration</h1>
+				<form id="loggerForm">
+					<label for="logFileName">Log File Name:</label><br>
+					<input type="text" id="logFileName" name="logFileName"><br>
+					<label for="logFilePath">Log File Path:</label><br>
+					<input type="text" id="logFilePath" name="logFilePath"><br>
+					<label for="logLevel">Log Level:</label><br>
+					<select name="logLevel" id="logLevel">
+						<option value="debug">Debug</option>
+						<option value="info">Info</option>
+						<option value="warning">Warning</option>
+						<option value="error">Error</option>
+						<option value="critical">Critical</option>
+					</select><br><br>
+					<input type="button" value="Run Auto Logging" id="runButton">
+				</form>
+	
+				<script nonce="${nonce}">
+					const vscode = acquireVsCodeApi();
+					document.getElementById('runButton').addEventListener('click', () => {
+						const logFileName = document.getElementById('logFileName').value;
+						const logFilePath = document.getElementById('logFilePath').value;
+						const logLevel = document.getElementById('logLevel').value;
+						vscode.postMessage({
+							command: 'runAutoLogging',
+							logFileName,
+							logFilePath,
+							logLevel
+						});
+					});
+				</script>
+			</body>
+			</html>`;
+	};
+	
+	
+	
+}

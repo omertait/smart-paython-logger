@@ -12,6 +12,24 @@
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
+      "viewsContainers": {
+        "activitybar": [
+            {
+                "id": "smartPythonLoggerContainer",
+                "title": "Smart Python Logger",
+                "icon": "media/log-file-icon.svg" 
+            }
+        ]
+    },
+    "views": {
+        "smartPythonLoggerContainer": [
+            {
+                "type" : "webview",
+                "id": "smartPythonLoggerView",
+                "name": "smartPythonLoggerView"
+            }
+        ]
+    },
     "commands": [
       {
         "command": "smart-paython-logger.helloWorld",
