@@ -48,6 +48,10 @@
         "title": "Auto Logging with AI"
       },
       {
+        "command": "smart-paython-logger.runAutoLogging",
+        "title": "runAutoLogging"
+      },
+      {
         "command": "smart-paython-logger.openUI",
         "title": "Open Smart Python Logger UI"
       }
