@@ -1,12 +1,14 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
-import {fetchGPT3Response} from './openai-funcs';
+import {GPTInteraction} from './GPTInteraction';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { getdefaultLogFileName, defaultLogFilePath, defaultLogLevel } from './run-config';
+import { getdefaultLogFileName, defaultLogFilePath, defaultLogLevel, defaultFormat, initial_prompt, not_valid_prompt} from './run-config';
+import { setConfigFromArgs, isValidResponse } from './response-handler';
 
+const gptInteraction = new GPTInteraction();
 
 
 async function applyChanges(originalUri: vscode.Uri, modifiedUri: vscode.Uri) {
@@ -33,72 +35,6 @@ async function cleanupTempFile(filePath: string) {
 };
 
 
-function processGeneratedCode(code: string, logFileName: string, logFilePath: string, logLevel: string): string {
-    const loggingBasicConfigRegex = /logging\.basicConfig\(([^)]*)\)/;
-    const loggingImportRegex = /import logging/;
-    let modifiedCode = code;
-	console.log('modifiedCode: ' + modifiedCode);
-    if (loggingBasicConfigRegex.test(modifiedCode)) {
-        // Replace existing logging.basicConfig
-		console.log('replace existing logging.basicConfig');
-        modifiedCode = modifiedCode.replace(loggingBasicConfigRegex, `logging.basicConfig(filename='${logFilePath}/${logFileName}.log', level=logging.${logLevel.toUpperCase()})`);
-    } else if (loggingImportRegex.test(modifiedCode)) {
-        // Add logging.basicConfig after import
-        modifiedCode = modifiedCode.replace(loggingImportRegex, `$&\nlogging.basicConfig(filename='${logFilePath}/${logFileName}.log', level=logging.${logLevel.toUpperCase()})`);
-		console.log('add logging.basicConfig after import');
-    } else {
-        // Add import and logging.basicConfig at the start of the code
-        modifiedCode = `import logging\nlogging.basicConfig(filename='${logFilePath}/${logFileName}.log', level=logging.${logLevel.toUpperCase()})\n` + modifiedCode;
-    }
-	console.log('modifiedCode after: ' + modifiedCode);
-    return modifiedCode;
-}
-
-function isValidResponse(original: string, modified: string): boolean {
-    // Ignore empty lines in original code and modified code
-    const originalLines = original.split('\n').filter(line => line.trim());
-    const modifiedLines = modified.split('\n').filter(line => line.trim());
-
-    let origIndex = 0;
-    let modIndex = 0;
-
-    // Regex to match valid logging additions
-    const loggingRegex = /^(import logging|from logging import|logging.basicConfig\([^)]*\)|logger\s*=\s*logging.getLogger\(__name__\)|(logger|logging)\.(debug|info|warning|error|critical)\([^)]*\))$/;
-
-    console.log(originalLines.length, modifiedLines.length);
-
-    while (origIndex < originalLines.length || modIndex < modifiedLines.length) {
-        let origLine = "";
-        let modLine = "";
-
-        if (origIndex < originalLines.length) {
-            origLine = originalLines[origIndex].trim();
-        }
-        if (modIndex < modifiedLines.length) {
-            modLine = modifiedLines[modIndex].trim();
-        }
-
-        // If all original lines have been read, just check for valid logging additions
-        if (origIndex === originalLines.length && !loggingRegex.test(modLine)) {
-            return false;
-        }
-        if (modLine && !loggingRegex.test(modLine) && modLine !== origLine) {
-            return false; // Unauthorized change detected
-        }
-        if (modLine === origLine && !loggingRegex.test(modLine)) {
-            origIndex++;
-        }
-        
-        modIndex++;
-    }
-    
-    if (origIndex < originalLines.length) {
-        return false; // Some original lines are missing in the modified code
-    }
-
-    return true;
-}
-
 function runAutoLogging(logFileName : string, logFilePath : string, logLevel : string) {
 	const editor = vscode.window.activeTextEditor;
         if (!editor) {
@@ -110,12 +46,8 @@ function runAutoLogging(logFileName : string, logFilePath : string, logLevel : s
         const entireCode = document.getText();
 
         // Prepare the prompt for OpenAI
-        const prompt = `As a professional Python developer, your task is to enhance the given Python code by adding comprehensive logging. The logging should be implemented using Python's 'logging' module. Ensure that the logging captures key events, errors, and information at appropriate levels (debug, info, warning, error, critical) to aid in debugging and monitoring the program's behavior. The code also needs to be clean, efficient, and adhere to Python best practices. Here is the code:
-
-		${entireCode}
+        const prompt = initial_prompt.replace('<CODE>', entireCode);
 		
-		Please add logging to the above code following best practices in Python programming. you are allowed only to add logging statments and not modify the existing code. responed only with python code.
-		`;
         // Show progress indicator while calling the GPT API
         vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
@@ -124,18 +56,25 @@ function runAutoLogging(logFileName : string, logFilePath : string, logLevel : s
         }, async (progress, token) => {
             token.onCancellationRequested(() => {
                 console.log("User canceled the AI processing.");
-                // Handle the cancellation if necessary
             });
 
             progress.report({ increment: -1 }); // Indeterminate progress
 
         // Fetch response from GPT-3
         try {
-            const aiModifiedCode = await fetchGPT3Response(prompt);
+            let aiModifiedCode = await gptInteraction.fetchGPT3Response(prompt);
             if (aiModifiedCode) {
+				// Check if the response is valid - if not, try again to get a valid response
+				if (!isValidResponse(entireCode, aiModifiedCode)) {
+					console.log('Invalid response from AI. Prompting user for full code.');
+					aiModifiedCode = await gptInteraction.fetchGPT3Response(not_valid_prompt);
+				}
 
+				if (aiModifiedCode === null) {
+					throw new Error('OpenAI API returned null response');
+				}
 				// process the generated code - adjust logging level and file name/path
-				const processedCode = processGeneratedCode(aiModifiedCode, logFileName, logFilePath, logLevel);
+				const processedCode = setConfigFromArgs(aiModifiedCode, logFileName, logFilePath, logLevel, defaultFormat);
 
                 // Create a temporary file for the AI-modified code
                 const tempFilePath = path.join(os.tmpdir(), `ai_modified_${path.basename(document.fileName)}`);
@@ -157,7 +96,10 @@ function runAutoLogging(logFileName : string, logFilePath : string, logLevel : s
 						else{
 							vscode.window.showInformationMessage("Changes discarded.");
 						}
-						
+
+						// clear conersation history
+						gptInteraction.clearMessages();
+
 						// Close the temporary file tab
 						const tempFileDocument = await vscode.workspace.openTextDocument(tempFileUri);
 						const tempFileEditor = vscode.window.visibleTextEditors.find(editor => editor.document === tempFileDocument);
@@ -185,13 +127,6 @@ export function activate(context: vscode.ExtensionContext) {
 	// This line of code will only be executed once when your extension is activated
 	console.log('Congratulations, your extension "smart-paython-logger" is now active!');
 
-	
-	let gpt_Test = vscode.commands.registerCommand('smart-paython-logger.gpt_Test', async () => {
-		// The code you place here will be executed every time your command is executed
-		// Display a message box to the user
-		let response = await fetchGPT3Response('what is the best way to learn python?');
-		vscode.window.showInformationMessage(response || 'No response');
-	});
 
 	let addDebugLogging = vscode.commands.registerCommand('smart-paython-logger.addDebugLogging', () => {
         const editor = vscode.window.activeTextEditor;
@@ -228,14 +163,12 @@ export function activate(context: vscode.ExtensionContext) {
         return vscode.workspace.applyEdit(edit);
 	});
 
-	let autoLogging = vscode.commands.registerCommand('smart-paython-logger.autoLogging', async () => {
-		runAutoLogging('', '', 'debug');
-        });
+	
 	let runAutoLoggingcmd = vscode.commands.registerCommand('smart-paython-logger.runAutoLogging', async (logFileName, logFilePath, loglevel) => {
 		runAutoLogging(logFileName, logFilePath, loglevel);
 		});
 
-	context.subscriptions.push(gpt_Test, addDebugLogging, autoLogging,runAutoLoggingcmd, 
+	context.subscriptions.push(addDebugLogging, runAutoLoggingcmd, 
 		vscode.window.registerWebviewViewProvider(
 		'smartPythonLoggerView',
 		new SmartPythonLoggerViewProvider(context.extensionUri)

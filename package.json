@@ -44,10 +44,6 @@
         "title": "Add Debug Logging"
       },
       {
-        "command": "smart-paython-logger.autoLogging",
-        "title": "Auto Logging with AI"
-      },
-      {
         "command": "smart-paython-logger.runAutoLogging",
         "title": "runAutoLogging"
       },
@@ -59,13 +55,8 @@
     "keybindings": [
       {
           "command": "smart-paython-logger.addDebugLogging",
-          "key": "ctrl+l+q",
+          "key": "ctrl+l",
           "when": "editorTextFocus && editorLangId == python"
-      },
-      {
-        "command": "smart-paython-logger.openUI",
-        "key": "ctrl+l",
-        "when": "editorTextFocus && editorLangId == python"
       }
   ]
   },"mocha": {
